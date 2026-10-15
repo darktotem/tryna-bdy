@@ -1,7 +1,8 @@
-/* EDIT THESE IF DUMPED*/
-const NAME   = "TINA";                 // shown inside the heart 4 letters looks best(DON'T REMOVE!!!)
+/* EDIT THESE IF DUMPED */
+const NAME   = "TINA";                 // the letters that shift everywhere
 const LINE_1 = "Happy Birthday Tina";  // falls and writes itself below the heart
 const LINE_2 = "from Victor";
+
 
 const card  = document.getElementById('card');
 const flap  = document.getElementById('flap');
@@ -10,7 +11,7 @@ const stage = document.getElementById('stage');
 const cv    = document.getElementById('c');
 const ctx   = cv.getContext('2d');
 
-/* Peel the card away, then go black  */
+/* Peel the card away, then go black */
 btn.addEventListener('click', () => {
   btn.disabled = true;
   const dur = 950, s = performance.now();
@@ -33,19 +34,19 @@ btn.addEventListener('click', () => {
   }
 });
 
-/* Matrix and heart */
-const CHARS = NAME; // every letter on screen (heart + rain) only shifts between these
+/* ---------- Matrix rain + heart that stacks up ---------- */
+const CHARS = NAME; // every letter on screen only shifts between these
 const rc    = () => CHARS[(Math.random() * CHARS.length) | 0];
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-const easeIO = q => q < .5 ? 4 * q * q * q : 1 - Math.pow(-2 * q + 2, 3) / 2;
 
 // timeline (ms)
-const TC = 2800;   // letters start gathering into the heart
-const TS = 5600;   // heart formed -> heavier rain starts
-const TM = 6300;   // birthday message starts falling in
+const TC = 700;    // first letters start landing at the bottom tip of the heart
+let TS = 0;        // heart finished -> heavier rain + heartbeat (set in build)
+let TM = 0;        // birthday message starts falling (set in build)
 
 let W, H, dpr, fs, cw, ch, S, cx, cy;
 let parts, grid, cols, rows, rain, msg, msgTop, msgBot;
+let hStep = 90, hJmax = 0;
 let t0 = 0, last = 0, running = false;
 
 function insideHeart(px, py, m = 0) {
@@ -66,8 +67,9 @@ function build() {
   cx = W / 2;
   cy = H * 0.40 + 0.125 * S;
 
-  // heart particles
-  parts = [];
+  // heart cells
+  const cells = [];
+  let jMin = 1e9, jMax = -1;
   const nI = Math.floor(W / cw), nJ = Math.floor(H / ch);
   for (let i = 0; i < nI; i++) {
     for (let j = 0; j < nJ; j++) {
@@ -75,22 +77,34 @@ function build() {
       if (!insideHeart(px, py)) continue;
       const edge = !insideHeart(px - cw, py) || !insideHeart(px + cw, py) ||
                    !insideHeart(px, py - ch) || !insideHeart(px, py + ch);
-      const dir = Math.random() < .5 ? -1 : 1;
-      parts.push({
-        tx: px, ty: py,
-        c: rc(),
-        interval: 300 + Math.random() * 900,
-        col: edge ? '#d8b4fe' : '#a855f7',
-        alpha: edge ? 1 : 0.6 + Math.random() * 0.4,
-        delay: Math.random() * 900,
-        a: Math.random() * 6.283, b: Math.random() * 6.283,
-        R: Math.sqrt(Math.random()),
-        w: dir * (0.0004 + Math.random() * 0.0008),
-        w2: -dir * (0.0004 + Math.random() * 0.0008),
-        lastFlip: Math.random() * 70
-      });
+      cells.push({ i, j, px, py, edge });
+      if (j < jMin) jMin = j;
+      if (j > jMax) jMax = j;
     }
   }
+
+  // each letter falls from the top and lands in its spot; the heart fills from the bottom tip up
+  hJmax = jMax;
+  hStep = clamp(2600 / (jMax - jMin + 1), 50, 120);
+  const colOff = Array.from({ length: nI }, () => Math.random() * 250);
+  let lastLand = 0;
+  parts = cells.map(c => {
+    const L = TC + (jMax - c.j) * hStep + colOff[c.i] + Math.random() * hStep * 0.5;
+    const D = 700 + c.py * 0.25;
+    if (L > lastLand) lastLand = L;
+    return {
+      tx: c.px, ty: c.py,
+      c: rc(),
+      trail: [rc(), rc(), rc()],
+      col: c.edge ? '#d8b4fe' : '#a855f7',
+      alpha: c.edge ? 1 : 0.6 + Math.random() * 0.4,
+      land: L, dur: D, start: L - D,
+      interval: 300 + Math.random() * 900,
+      lastFlip: Math.random() * 70
+    };
+  });
+  TS = lastLand + 400;
+  TM = TS + 500;
 
   // falling rain
   cols = Math.floor(W / cw); rows = Math.ceil(H / ch);
@@ -138,9 +152,11 @@ function draw(t, dt) {
   ctx.textBaseline = 'middle';
   ctx.font = `${fs}px "Courier New", monospace`;
 
-  //rain
+  // ----- rain -----
   for (let n = 0; n < 30; n++) grid[(Math.random() * cols) | 0][(Math.random() * rows) | 0] = rc();
-  const maskHeart = t > TC + 1500, maskMsg = t > TM - 300;
+  const maskMsg = t > TM - 300;
+  // rain keeps out of the part of the heart that has already been stacked
+  const fillY = (hJmax - (t - TC) / hStep) * ch - 2 * ch;
   for (let c = 0; c < cols; c++) {
     const d = rain[c];
     if (t < d.start) continue;
@@ -156,40 +172,46 @@ function draw(t, dt) {
       if (r < 0 || r >= rows) continue;
       const py = (r + .5) * ch;
       if (maskMsg && py > msgTop && py < msgBot) continue;
-      if (maskHeart && insideHeart(px, py, 0.12)) continue;
+      if (py >= fillY && insideHeart(px, py, 0.12)) continue;
       if (k === 0) { ctx.fillStyle = '#f3e8ff'; ctx.globalAlpha = d.dim; }
       else { ctx.fillStyle = '#8b5cf6'; ctx.globalAlpha = Math.pow(1 - k / d.len, 1.5) * 0.85 * d.dim; }
       ctx.fillText(grid[c][r], px, py);
     }
   }
 
-  //heart letters
-
+  // ----- heart letters (fall, land, stack) -----
   const bf = clamp((t - TS) / 800, 0, 1);
   const beat = 1 + bf * 0.025 * Math.pow(Math.max(0, Math.sin(t / 230)), 4);
-  const oy0 = H * 0.42;
   for (const p of parts) {
-    const q = clamp((t - TC - p.delay) / 1700, 0, 1);
-    const e = easeIO(q);
-    const ox = cx + Math.cos(p.a + p.w * t) * p.R * W * 0.5;
-    const oy = oy0 + Math.sin(p.b + p.w2 * t) * p.R * H * 0.4;
-    const bx = cx + (p.tx - cx) * beat, by = cy + (p.ty - cy) * beat;
-    const x = ox + (bx - ox) * e, y = oy + (by - oy) * e;
-
+    if (t < p.start) continue;
+    const q = (t - p.start) / p.dur;
     if (q < 1) {
+      // still falling
+      const y = -ch + (p.ty + ch) * q * q;
       if (t - p.lastFlip > 70) { p.c = rc(); p.lastFlip = t; }
-      ctx.fillStyle = '#c084fc'; ctx.globalAlpha = 0.9;
+      ctx.fillStyle = '#a855f7';
+      for (let k = 0; k < 3; k++) {
+        ctx.globalAlpha = 0.35 / (k + 1);
+        ctx.fillText(p.trail[k], p.tx, y - (k + 1) * ch);
+      }
+      ctx.globalAlpha = 0.95;
+      ctx.fillStyle = '#e9d5ff';
+      ctx.fillText(p.c, p.tx, y);
     } else {
+      // landed: brief flash, then letters keep shifting between T I N A
+      const age = t - p.land;
       if (t - p.lastFlip > p.interval) {
         p.c = rc(); p.lastFlip = t;
         p.interval = 300 + Math.random() * 900;
       }
-      ctx.fillStyle = p.col; ctx.globalAlpha = p.alpha;
+      const x = cx + (p.tx - cx) * beat, y = cy + (p.ty - cy) * beat;
+      ctx.fillStyle = age < 350 ? '#f3e8ff' : p.col;
+      ctx.globalAlpha = age < 350 ? 1 : p.alpha;
+      ctx.fillText(p.c, x, y);
     }
-    ctx.fillText(p.c, x, y);
   }
 
-  // ----- birthday message -----
+  //birthday message 
   for (const m of msg) {
     const p = (t - m.start) / m.dur;
     if (p < 0) continue;
